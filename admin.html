@@ -161,6 +161,7 @@
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function show(id, on) { $(id).classList.toggle('hide', !on); }
+  var API = 'https://script.google.com/macros/s/AKfycbxfOBxIaAtLCLcBPWiP5lCeN_-WQwXEC4C_P-4_wXG21Tp2fSWi9zi3MHhyKubKu-6zJA/exec';
   function call(fn) {
     var args = Array.prototype.slice.call(arguments, 1);
     if (window.google && google.script && google.script.run) {
@@ -169,13 +170,37 @@
         r[fn].apply(r, args);
       });
     }
-    return fetch('https://script.google.com/macros/s/AKfycbxfOBxIaAtLCLcBPWiP5lCeN_-WQwXEC4C_P-4_wXG21Tp2fSWi9zi3MHhyKubKu-6zJA/exec', {
-      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ fn: fn, args: args })
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      if (!j.ok) throw new Error(j.error);
-      return j.data;
-    });
+    // Gọi API; nếu Google báo quá tải hoặc mạng chập chờn thì tự thử lại tối đa 4 lần.
+    var attempt = 0;
+    function go() {
+      // Quá 20 giây chưa có phản hồi thì hủy và gửi lại, tránh để học sinh chờ mãi.
+      var ctl = window.AbortController ? new AbortController() : null;
+      var timer = ctl ? setTimeout(function () { ctl.abort(); }, 20000) : 0;
+      return fetch(API, {
+        method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ fn: fn, args: args }), signal: ctl ? ctl.signal : undefined
+      }).then(function (r) { return r.text(); }).then(function (s) {
+        clearTimeout(timer);
+        var j;
+        try { j = JSON.parse(s); } catch (e) { throw { retry: true }; }
+        if (!j.ok) {
+          if (/too many|simultaneous|timed out|lock|service/i.test(j.error)) throw { retry: true, msg: j.error };
+          throw new Error(j.error);
+        }
+        return j.data;
+      }, function (e) {
+        clearTimeout(timer);
+        if (e instanceof Error && e.name !== 'AbortError' && e.name !== 'TypeError') throw e;
+        throw { retry: true };
+      }).catch(function (e) {
+        if (e && e.retry && attempt < 5) {
+          attempt++;
+          return new Promise(function (ok) { setTimeout(ok, 800 * attempt + Math.random() * 1500); }).then(go);
+        }
+        throw e instanceof Error ? e : new Error('Hệ thống đang đông, em thử lại sau ít giây.');
+      });
+    }
+    return go();
   }
   function emsg(e) { return String((e && e.message) || e || 'Có lỗi xảy ra').replace(/^Error:\s*/, ''); }
   function addDays(d, n) { var t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
