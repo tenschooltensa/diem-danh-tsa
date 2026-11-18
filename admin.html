@@ -112,9 +112,12 @@
           <h2>Xếp hạng chuyên cần</h2>
           <div class="tools">
             <input id="q" placeholder="Tìm tên hoặc SBD" style="width:170px">
+            <select id="month" title="Lọc theo tháng"></select>
             <select id="subj"></select>
+            <button class="btn sm" id="bCsv" type="button" title="Tải bảng xếp hạng đang xem về máy (mở bằng Excel)">Tải danh sách</button>
           </div>
         </div>
+        <p class="sub" id="rankInfo" style="margin:-4px 0 6px"></p>
         <div class="scroll" id="rank"></div>
         <p class="note">Bấm vào một bạn để xem bạn đó đã học những buổi nào.</p>
       </div>
@@ -127,7 +130,7 @@
       <div class="head">
         <div>
           <h2>Cảnh báo vắng liên tiếp</h2>
-          <p class="sub">Nội quy: vắng 3 buổi liên tiếp bị thu hồi khóa học. Tính chung tất cả các môn, theo thứ tự buổi trên thời khóa biểu, chỉ tính các buổi đã đóng điểm danh.</p>
+          <p class="sub">Nội quy: vắng 5 buổi liên tiếp bị thu hồi khóa học. Tính chung tất cả các môn, theo thứ tự buổi trên thời khóa biểu, chỉ tính các buổi đã đóng điểm danh.</p>
         </div>
       </div>
       <div id="alert"></div>
@@ -242,8 +245,12 @@
     $('subj').innerHTML = '<option value="">Tất cả môn</option>' + D.subjects.map(function (s) { return '<option>' + esc(s) + '</option>'; }).join('');
     if (D.subjects.indexOf(cur) >= 0) $('subj').value = cur;
     $('subjList').innerHTML = D.subjects.map(function (s) { return '<option value="' + esc(s) + '">'; }).join('');
+    fillMonths();
     renderAll();
   }
+
+  /** Nội quy: vắng bao nhiêu buổi liên tiếp thì thu hồi khóa học. Cảnh báo "nên nhắc" từ (số này − 2). */
+  var VANG_THU_HOI = 5;
 
   function renderAll() { renderMetrics(); renderRank(); renderDetail(); renderAlert(); renderTkb(); renderMisc(); }
 
@@ -273,13 +280,14 @@
   function renderAlert() {
     var r = absenceStreaks();
     if (!r.done) { $('alert').innerHTML = '<p class="sub" style="padding:8px 0">Chưa có buổi học nào kết thúc.</p>'; return; }
-    var list = r.rows.filter(function (x) { return x.cur >= 2 || x.max >= 3; })
+    var warnAt = VANG_THU_HOI - 2;
+    var list = r.rows.filter(function (x) { return x.cur >= warnAt || x.max >= VANG_THU_HOI; })
       .sort(function (a, b) { return b.cur - a.cur || b.max - a.max || a.name.localeCompare(b.name, 'vi'); });
-    if (!list.length) { $('alert').innerHTML = '<p class="sub" style="padding:8px 0">Không có bạn nào vắng từ 2 buổi liên tiếp trở lên.</p>'; return; }
+    if (!list.length) { $('alert').innerHTML = '<p class="sub" style="padding:8px 0">Không có bạn nào vắng từ ' + warnAt + ' buổi liên tiếp trở lên.</p>'; return; }
     $('alert').innerHTML = '<div class="scroll" style="max-height:360px">' + list.map(function (x) {
-      var tag = x.cur >= 3 ? '<span class="tag bad">Đủ điều kiện thu hồi</span>'
-        : x.max >= 3 ? '<span class="tag bad2">Từng vắng ' + x.max + ' buổi liên tiếp</span>'
-        : '<span class="tag warn">Vắng 2 buổi liên tiếp · nên nhắc</span>';
+      var tag = x.cur >= VANG_THU_HOI ? '<span class="tag bad">Đủ điều kiện thu hồi</span>'
+        : x.max >= VANG_THU_HOI ? '<span class="tag bad2">Từng vắng ' + x.max + ' buổi liên tiếp</span>'
+        : '<span class="tag warn">Vắng ' + x.cur + ' buổi liên tiếp · nên nhắc</span>';
       return '<button type="button" class="arow" data-sbd="' + esc(x.sbd) + '"><span><span class="who">' + esc(x.name) + '<small>' + esc(x.sbd) + '</small></span><br>'
         + '<span class="facts">Đang vắng liên tiếp: ' + x.cur + ' buổi · Dài nhất: ' + x.max + ' buổi · Có mặt gần nhất: ' + (x.last ? fmtD(x.last) : 'chưa có') + '</span></span>' + tag + '</button>';
     }).join('') + '</div>';
@@ -295,19 +303,50 @@
   }
 
   function scope() {
-    var sub = $('subj').value;
-    return D.past.filter(function (s) { return !sub || s.subject === sub; });
+    var sub = $('subj').value, mon = $('month').value;
+    return D.past.filter(function (s) { return (!sub || s.subject === sub) && (!mon || s.date.slice(0, 7) === mon); });
   }
 
-  function renderRank() {
-    var ses = scope(), q = $('q').value.trim().toLowerCase();
+  function monthLabel(m) { var p = m.split('-'); return 'Tháng ' + (+p[1]) + '/' + p[0]; }
+
+  function fillMonths() {
+    var cur = $('month').value, seen = {}, months = [];
+    D.sessions.forEach(function (s) { var m = s.date.slice(0, 7); if (!seen[m]) { seen[m] = 1; months.push(m); } });
+    months.sort().reverse();
+    $('month').innerHTML = '<option value="">Tất cả thời gian</option>' + months.map(function (m) { return '<option value="' + m + '">' + monthLabel(m) + '</option>'; }).join('');
+    if (months.indexOf(cur) >= 0) $('month').value = cur;
+  }
+
+  /** Bảng xếp hạng theo bộ lọc đang chọn (tháng, môn). Cùng số buổi thì cùng hạng. */
+  function rankList() {
+    var ses = scope();
     var list = D.students.map(function (st) {
       var m = D.attMap[st.sbd] || {}, c = 0;
       ses.forEach(function (s) { if (m[s.id] !== undefined) c++; });
-      return { sbd: st.sbd, name: st.name, count: c };
+      return { sbd: st.sbd, name: st.name, note: st.note, count: c };
     }).sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name, 'vi'); });
     var rank = 0;
     list.forEach(function (r, i) { if (i === 0 || r.count !== list[i - 1].count) rank = i + 1; r.rank = rank; });
+    return { ses: ses, list: list };
+  }
+
+  function downloadCsv() {
+    var rl = rankList(), mon = $('month').value, sub = $('subj').value, total = rl.ses.length;
+    var rows = [['Hạng', 'SBD', 'Họ tên', 'Ghi chú', 'Số buổi có mặt', 'Tổng số buổi', 'Tỷ lệ (%)']];
+    rl.list.forEach(function (r) { rows.push([r.rank, r.sbd, r.name, r.note || '', r.count, total, total ? Math.round(r.count / total * 100) : 0]); });
+    var csv = rows.map(function (row) { return row.map(function (v) { v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\r\n');
+    var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'chuyen-can-' + (mon || 'tat-ca') + (sub ? '-' + sub.replace(/[^\wÀ-ỹ]+/g, '-') : '') + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  }
+
+  function renderRank() {
+    var rl = rankList(), list = rl.list, q = $('q').value.trim().toLowerCase();
+    var mon = $('month').value, sub = $('subj').value;
+    $('rankInfo').textContent = (mon ? monthLabel(mon) : 'Tất cả thời gian') + (sub ? ' · ' + sub : '') + ' · ' + rl.ses.length + ' buổi đã diễn ra';
     var max = list.length ? Math.max(list[0].count, 1) : 1;
     var shown = list.filter(function (r) { return !q || r.name.toLowerCase().indexOf(q) >= 0 || r.sbd.toLowerCase().indexOf(q) >= 0; });
     $('rank').innerHTML = shown.length ? shown.map(function (r) {
@@ -396,6 +435,8 @@
 
   $('q').addEventListener('input', renderRank);
   $('subj').addEventListener('change', function () { renderRank(); renderDetail(); });
+  $('month').addEventListener('change', function () { renderRank(); renderDetail(); });
+  $('bCsv').addEventListener('click', downloadCsv);
   $('rank').addEventListener('click', function (ev) {
     var b = ev.target.closest('.rrow');
     if (!b) return;
@@ -404,7 +445,7 @@
   $('alert').addEventListener('click', function (ev) {
     var b = ev.target.closest('.arow');
     if (!b) return;
-    sel = b.getAttribute('data-sbd'); $('q').value = ''; $('subj').value = ''; renderRank(); renderDetail();
+    sel = b.getAttribute('data-sbd'); $('q').value = ''; $('subj').value = ''; $('month').value = ''; renderRank(); renderDetail();
     $('detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
