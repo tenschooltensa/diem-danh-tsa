@@ -48,6 +48,17 @@
   .rk { display:inline-block; width:26px; color:var(--muted); font-weight:700; }
   .hide { display:none !important; }
   .foot { text-align:center; color:var(--muted); font-size:12px; margin-top:18px; }
+  .wk { display:flex; background:var(--bg); border-radius:10px; padding:3px; margin:0 0 12px; }
+  .wk button { flex:1; height:34px; border:0; border-radius:8px; background:none; font:inherit; font-size:14px; font-weight:600; color:var(--muted); cursor:pointer; }
+  .wk button.on { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(15,23,42,.08); }
+  .day { font-size:13px; font-weight:700; color:var(--muted); margin:14px 0 4px; text-transform:none; }
+  .day:first-child { margin-top:0; }
+  .day.today { color:var(--brand); }
+  .slot { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); }
+  .slot:last-child { border-bottom:0; }
+  .slot .t { font-weight:600; }
+  .slot .m { font-size:13px; color:var(--muted); }
+  .slot.past { opacity:.55; }
 </style>
 </head>
 <body>
@@ -64,6 +75,17 @@
       <div class="err hide" id="e1"></div>
       <button class="btn" id="b1" type="submit">Tiếp tục</button>
     </form>
+  </div>
+
+  <!-- Lịch học (hiện ở màn hình nhập SBD) -->
+  <div class="card" id="sched">
+    <h2>Lịch học</h2>
+    <div class="wk">
+      <button type="button" id="wk0" class="on">Tuần này</button>
+      <button type="button" id="wk1">Tuần sau</button>
+    </div>
+    <p class="sub" id="wkLabel"></p>
+    <div id="schedList" style="margin-top:10px"><p class="sub">Đang tải lịch học…</p></div>
   </div>
 
   <!-- Bước 2 -->
@@ -198,7 +220,7 @@
 
   function toStep1() {
     S.view = null; S.pick = '';
-    show('s1', true); show('s2', false); show('s3', false); show('statsBox', false);
+    show('s1', true); show('sched', true); show('s2', false); show('s3', false); show('statsBox', false);
     err('e1', ''); $('sbd').focus();
   }
 
@@ -211,7 +233,7 @@
       if (!v.ok) { err('e1', v.msg); return; }
       S.sbd = v.sbd; S.view = v; S.pick = ''; store(v.sbd);
       $('hello').textContent = v.name; $('hsbd').textContent = 'SBD ' + v.sbd;
-      show('s1', false); show('s2', true); show('s3', false); err('e2', '');
+      show('s1', false); show('sched', false); show('s2', true); show('s3', false); err('e2', '');
       renderSessions(); renderStats();
     }).catch(function () {
       err('e1', 'Không kết nối được. Kiểm tra mạng rồi thử lại.');
@@ -241,6 +263,46 @@
 
   $('change').addEventListener('click', function () { $('sbd').value = ''; store(''); toStep1(); });
   $('sbd').value = store();
+
+  // ---- Lịch học tuần ----
+  var DOWN = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+  var schedCache = {};
+  function dowName(d) { return DOWN[new Date(d + 'T00:00:00Z').getUTCDay()]; }
+  function renderSched(w) {
+    var p1 = w.mon.split('-'), p2 = w.sun.split('-');
+    $('wkLabel').textContent = p1[2] + '/' + p1[1] + ' – ' + p2[2] + '/' + p2[1] + '/' + p2[0];
+    if (!w.list.length) {
+      $('schedList').innerHTML = '<p class="sub">' + (w.off ? 'Tuần sau chưa có lịch học. Lịch được cập nhật hằng tuần.' : 'Tuần này chưa có lịch học.') + '</p>';
+      return;
+    }
+    var html = '', last = '';
+    w.list.forEach(function (s) {
+      if (s.date !== last) {
+        last = s.date;
+        var isToday = s.date === w.today;
+        html += '<div class="day' + (isToday ? ' today' : '') + '">' + (isToday ? 'Hôm nay · ' : '') + dowName(s.date) + ' ' + fmtDate(s.date) + '</div>';
+      }
+      var tag = s.state === 'open' ? '<span class="tag open">Đang mở điểm danh</span>' : '';
+      html += '<div class="slot' + (s.state === 'closed' ? ' past' : '') + '"><div><div class="t">' + esc(s.subject) + '</div>'
+        + '<div class="m">' + esc(s.start) + '–' + esc(s.end) + (s.teacher ? ' · ' + esc(s.teacher) : '') + (s.note ? ' · ' + esc(s.note) : '') + '</div></div>' + tag + '</div>';
+    });
+    $('schedList').innerHTML = html;
+  }
+  function loadSched(off) {
+    $('wk0').classList.toggle('on', off === 0);
+    $('wk1').classList.toggle('on', off === 1);
+    if (schedCache[off]) { renderSched(schedCache[off]); return; }
+    $('schedList').innerHTML = '<p class="sub">Đang tải lịch học…</p>';
+    call('getSchedule', off).then(function (w) {
+      schedCache[off] = w;
+      if ($('wk' + off).classList.contains('on')) renderSched(w);
+    }).catch(function () {
+      $('schedList').innerHTML = '<p class="sub">Chưa tải được lịch học. Tải lại trang để thử lại.</p>';
+    });
+  }
+  $('wk0').addEventListener('click', function () { loadSched(0); });
+  $('wk1').addEventListener('click', function () { loadSched(1); });
+  loadSched(0);
 </script>
 </body>
 </html>
