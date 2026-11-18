@@ -51,14 +51,23 @@
   .wk { display:flex; background:var(--bg); border-radius:10px; padding:3px; margin:0 0 12px; }
   .wk button { flex:1; height:34px; border:0; border-radius:8px; background:none; font:inherit; font-size:14px; font-weight:600; color:var(--muted); cursor:pointer; }
   .wk button.on { background:#fff; color:var(--ink); box-shadow:0 1px 2px rgba(15,23,42,.08); }
-  .day { font-size:13px; font-weight:700; color:var(--muted); margin:14px 0 4px; text-transform:none; }
-  .day:first-child { margin-top:0; }
-  .day.today { color:var(--brand); }
-  .slot { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); }
-  .slot:last-child { border-bottom:0; }
-  .slot .t { font-weight:600; }
-  .slot .m { font-size:13px; color:var(--muted); }
-  .slot.past { opacity:.55; }
+  .grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; }
+  @media (max-width:340px) { .grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+  .cell { border:1px solid var(--line); border-radius:12px; padding:8px; min-height:96px; background:#fff; display:flex; flex-direction:column; gap:4px; }
+  .cell.has { background:var(--tint); border-color:#F3D3D3; }
+  .cell.today { border:2px solid var(--brand); padding:7px; }
+  .cell.past { opacity:.5; }
+  .cell .dh { font-size:12px; font-weight:700; color:var(--muted); white-space:nowrap; }
+  .cell.today .dh { color:var(--brand); }
+  .cell .td { display:inline-block; font-size:10.5px; font-weight:700; color:#fff; background:var(--brand); border-radius:999px; padding:0 7px; align-self:flex-start; }
+  .cell .lg { height:26px; width:auto; align-self:flex-start; mix-blend-mode:multiply; }
+  .cell .off { font-size:12px; color:#A0A7B4; margin-top:auto; margin-bottom:auto; }
+  .cell .ss { font-size:12px; line-height:1.3; }
+  .cell .ss b { display:block; font-size:12.5px; color:var(--ink); overflow-wrap:anywhere; }
+  .cell .ss span { color:var(--muted); }
+  .cell .ss.open b { color:var(--brand); }
+  .cell .ss.open span::after { content:' · Đang mở'; color:var(--brand); font-weight:600; }
+  .cell .ss.done { opacity:.6; }
 </style>
 </head>
 <body>
@@ -265,28 +274,35 @@
   $('sbd').value = store();
 
   // ---- Lịch học tuần ----
-  var DOWN = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+  var DSHORT = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+  var LOGO = (document.querySelector('.brand img') || {}).src || '';
   var schedCache = {};
-  function dowName(d) { return DOWN[new Date(d + 'T00:00:00Z').getUTCDay()]; }
+  function addDay(d, n) { var t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
   function renderSched(w) {
     var p1 = w.mon.split('-'), p2 = w.sun.split('-');
-    $('wkLabel').textContent = p1[2] + '/' + p1[1] + ' – ' + p2[2] + '/' + p2[1] + '/' + p2[0];
-    if (!w.list.length) {
-      $('schedList').innerHTML = '<p class="sub">' + (w.off ? 'Tuần sau chưa có lịch học. Lịch được cập nhật hằng tuần.' : 'Tuần này chưa có lịch học.') + '</p>';
-      return;
-    }
-    var html = '', last = '';
-    w.list.forEach(function (s) {
-      if (s.date !== last) {
-        last = s.date;
-        var isToday = s.date === w.today;
-        html += '<div class="day' + (isToday ? ' today' : '') + '">' + (isToday ? 'Hôm nay · ' : '') + dowName(s.date) + ' ' + fmtDate(s.date) + '</div>';
+    $('wkLabel').textContent = p1[2] + '/' + p1[1] + ' – ' + p2[2] + '/' + p2[1] + '/' + p2[0]
+      + (w.list.length ? '' : (w.off ? ' · Tuần sau chưa có lịch học, lịch được cập nhật hằng tuần.' : ' · Tuần này chưa có lịch học.'));
+    var byDay = {};
+    w.list.forEach(function (s) { (byDay[s.date] = byDay[s.date] || []).push(s); });
+    var html = '<div class="grid">';
+    for (var i = 0; i < 7; i++) {
+      var d = addDay(w.mon, i), list = byDay[d] || [];
+      var isToday = d === w.today, isPast = d < w.today;
+      html += '<div class="cell' + (list.length ? ' has' : '') + (isToday ? ' today' : '') + (isPast ? ' past' : '') + '">'
+        + '<div class="dh">' + DSHORT[new Date(d + 'T00:00:00Z').getUTCDay()] + ' ' + fmtDate(d) + '</div>' + (isToday ? '<span class="td">Hôm nay</span>' : '');
+      if (!list.length) {
+        html += '<div class="off">Nghỉ</div>';
+      } else {
+        if (LOGO) html += '<img class="lg" alt="TENSA" src="' + LOGO + '">';
+        list.forEach(function (s) {
+          var tip = s.subject + ' · ' + s.start + '–' + s.end + (s.teacher ? ' · ' + s.teacher : '') + (s.note ? ' · ' + s.note : '');
+          html += '<div class="ss' + (s.state === 'open' ? ' open' : '') + (s.state === 'closed' && !isPast ? ' done' : '') + '" title="' + esc(tip) + '">'
+            + '<b>' + esc(s.subject) + '</b><span>' + esc(s.start) + (s.teacher ? ' · ' + esc(s.teacher) : '') + '</span></div>';
+        });
       }
-      var tag = s.state === 'open' ? '<span class="tag open">Đang mở điểm danh</span>' : '';
-      html += '<div class="slot' + (s.state === 'closed' ? ' past' : '') + '"><div><div class="t">' + esc(s.subject) + '</div>'
-        + '<div class="m">' + esc(s.start) + '–' + esc(s.end) + (s.teacher ? ' · ' + esc(s.teacher) : '') + (s.note ? ' · ' + esc(s.note) : '') + '</div></div>' + tag + '</div>';
-    });
-    $('schedList').innerHTML = html;
+      html += '</div>';
+    }
+    $('schedList').innerHTML = html + '</div>';
   }
   function loadSched(off) {
     $('wk0').classList.toggle('on', off === 0);
