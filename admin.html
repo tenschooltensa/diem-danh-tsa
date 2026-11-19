@@ -99,6 +99,11 @@
       </div>
     </div>
 
+    <div class="card hide" id="warnBox" style="margin-bottom:14px; border-color:#F5C26B; background:#FFFBEB">
+      <h2 style="color:#92400E">Cần kiểm tra dữ liệu trong Google Sheet</h2>
+      <ul id="warnList" style="margin:6px 0 0; padding-left:20px; font-size:13px; color:#78350F"></ul>
+    </div>
+
     <div class="metrics">
       <div class="metric"><div class="sub">Học sinh</div><div class="n" id="mHs">0</div></div>
       <div class="metric"><div class="sub">Buổi đã diễn ra</div><div class="n" id="mSes">0</div></div>
@@ -192,7 +197,10 @@
         r[fn].apply(r, args);
       });
     }
-    // Gọi API; nếu Google báo quá tải hoặc mạng chập chờn thì tự thử lại tối đa 4 lần.
+    // Gọi API; nếu Google báo quá tải hoặc mạng chập chờn thì tự thử lại tối đa 5 lần.
+    // Riêng thao tác ghi (thêm/sửa/xóa/chép buổi): mất mạng giữa chừng thì KHÔNG tự gửi lại,
+    // vì có thể lần đầu đã lưu xong, gửi lại sẽ tạo buổi trùng.
+    var isWrite = /^admin(Save|Delete|Copy)/.test(fn);
     var attempt = 0;
     function go() {
       // Quá 20 giây chưa có phản hồi thì hủy và gửi lại, tránh để học sinh chờ mãi.
@@ -213,6 +221,7 @@
       }, function (e) {
         clearTimeout(timer);
         if (e instanceof Error && e.name !== 'AbortError' && e.name !== 'TypeError') throw e;
+        if (isWrite) throw new Error('Mạng chập chờn nên chưa rõ thao tác đã lưu chưa. Bấm "Tải lại số liệu" để kiểm tra trước khi làm lại.');
         throw { retry: true };
       }).catch(function (e) {
         if (e && e.retry && attempt < 5) {
@@ -224,6 +233,7 @@
     }
     return go();
   }
+  function timeOf(stamp) { var m = String(stamp || '').match(/(\d{1,2}):(\d{2})/); return m ? ('0' + m[1]).slice(-2) + ':' + m[2] : '✓'; }
   function emsg(e) { return String((e && e.message) || e || 'Có lỗi xảy ra').replace(/^Error:\s*/, ''); }
   function addDays(d, n) { var t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
   function dow(d) { return new Date(d + 'T00:00:00Z').getUTCDay(); }
@@ -334,7 +344,13 @@
     var rl = rankList(), mon = $('month').value, sub = $('subj').value, total = rl.ses.length;
     var rows = [['Hạng', 'SBD', 'Họ tên', 'Ghi chú', 'Số buổi có mặt', 'Tổng số buổi', 'Tỷ lệ (%)']];
     rl.list.forEach(function (r) { rows.push([r.rank, r.sbd, r.name, r.note || '', r.count, total, total ? Math.round(r.count / total * 100) : 0]); });
-    var csv = rows.map(function (row) { return row.map(function (v) { v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(','); }).join('\r\n');
+    var csv = rows.map(function (row) {
+      return row.map(function (v) {
+        v = String(v);
+        if (/^[=+\-@]/.test(v)) v = "'" + v;   // tránh Excel hiểu nhầm thành công thức
+        return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+      }).join(',');
+    }).join('\r\n');
     var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -372,8 +388,10 @@
       + '<p class="sub">' + esc(st.sbd) + (st.note ? ' · ' + esc(st.note) : '') + ' · ' + c + '/' + ses.length + ' buổi (' + pct + '%)</p>'
       + '<div class="scroll" style="margin-top:8px">' + (ses.length ? ses.map(function (s) {
         var t = m[s.id];
-        return '<div class="row"><span>' + fmtD(s.date) + ' · ' + esc(s.start) + ' · ' + esc(s.subject) + '</span>'
-          + (t !== undefined ? '<span class="tag ok">' + esc(t.slice(11, 16)) + '</span>' : '<span class="tag no">Vắng</span>') + '</div>';
+        var tag = t !== undefined ? '<span class="tag ok">' + esc(timeOf(t)) + '</span>'
+          : closeMsOf(s) >= D.now ? '<span class="tag no">Đang mở điểm danh</span>'
+          : '<span class="tag no">Vắng</span>';
+        return '<div class="row"><span>' + fmtD(s.date) + ' · ' + esc(s.start) + ' · ' + esc(s.subject) + '</span>' + tag + '</div>';
       }).join('') : '<p class="sub">Chưa có buổi nào diễn ra.</p>') + '</div>';
   }
 
@@ -390,7 +408,14 @@
     }).join('') : '<p class="sub" style="padding:12px 0">Tuần này chưa có buổi học. Bấm “Thêm buổi” hoặc “Chép tuần trước sang”.</p>';
   }
 
+  function renderWarnings() {
+    var w = D.warnings || [];
+    show('warnBox', w.length > 0);
+    $('warnList').innerHTML = w.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('');
+  }
+
   function renderMisc() {
+    renderWarnings();
     $('rule').textContent = 'Mỗi buổi mở điểm danh từ ' + D.before + ' phút trước giờ bắt đầu đến ' + D.after + ' phút sau giờ kết thúc (đổi ở tab CauHinh).';
     var standalone = !(window.google && google.script && google.script.run);
     $('link').textContent = standalone ? location.origin + location.pathname.replace(/admin\.html$/i, '') : D.url ||'Xem link ở menu “Điểm danh TSA > Xem link app” trong Google Sheet.';
