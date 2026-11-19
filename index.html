@@ -243,9 +243,9 @@
       S.sbd = v.sbd; S.view = v; S.pick = ''; store(v.sbd);
       $('hello').textContent = v.name; $('hsbd').textContent = 'SBD ' + v.sbd;
       show('s1', false); show('sched', false); show('s2', true); show('s3', false); err('e2', '');
-      renderSessions(); renderStats();
-    }).catch(function () {
-      err('e1', 'Không kết nối được. Kiểm tra mạng rồi thử lại.');
+      renderSessions(); renderStats(); planRefresh();
+    }).catch(function (e) {
+      err('e1', friendly(e, 'Không kết nối được. Kiểm tra mạng rồi thử lại.'));
     }).then(function () { $('b1').disabled = false; $('b1').textContent = 'Tiếp tục'; });
   });
 
@@ -263,20 +263,47 @@
       S.view = v; S.pick = '';
       $('dTitle').textContent = v.checked.already ? 'Em đã điểm danh buổi này rồi' : 'Đã điểm danh';
       $('dSub').textContent = v.checked.subject + ' · ' + v.checked.at;
-      show('s3', true); renderSessions(); renderStats();
+      show('s3', true); renderSessions(); renderStats(); planRefresh();
       window.scrollTo(0, 0);
-    }).catch(function () {
-      err('e2', 'Không ghi nhận được. Kiểm tra mạng rồi thử lại.');
+    }).catch(function (e) {
+      err('e2', friendly(e, 'Không ghi nhận được. Kiểm tra mạng rồi thử lại.'));
     }).then(function () { $('b2').disabled = false; $('b2').textContent = 'Điểm danh'; });
   });
 
-  $('change').addEventListener('click', function () { $('sbd').value = ''; store(''); toStep1(); });
+  /** Thông báo lỗi dễ hiểu: lỗi từ hệ thống thì hiện đúng nội dung, lỗi mạng thì hiện câu mặc định. */
+  function friendly(e, fallback) {
+    var m = e && e.message ? String(e.message) : '';
+    return m && !/failed to fetch|network|load failed|abort/i.test(m) ? m : fallback;
+  }
+
+  // Bạn mở trang sớm (buổi học chưa mở): tự cập nhật đúng lúc buổi học mở điểm danh,
+  // không cần nhập lại SBD. Mỗi bạn lệch nhau vài giây để không dồn cùng một lúc.
+  var refreshTimer = 0;
+  function planRefresh() {
+    clearTimeout(refreshTimer);
+    var v = S.view;
+    if (!v || !v.now) return;
+    var next = 0;
+    v.sessions.forEach(function (s) { if (s.state === 'soon' && s.openAt && (!next || s.openAt < next)) next = s.openAt; });
+    if (!next) return;
+    var wait = Math.max(5000, next - v.now + 3000 + Math.random() * 20000);
+    if (wait > 6 * 3600 * 1000) return;
+    refreshTimer = setTimeout(function () {
+      if ($('s2').classList.contains('hide') || !S.sbd) return;
+      call('lookupStudent', S.sbd).then(function (nv) {
+        if (!nv.ok || $('s2').classList.contains('hide')) return;
+        S.view = nv; renderSessions(); renderStats(); planRefresh();
+      }).catch(function () {});
+    }, wait);
+  }
+
+  $('change').addEventListener('click', function () { clearTimeout(refreshTimer); $('sbd').value = ''; store(''); toStep1(); });
   $('sbd').value = store();
 
   // ---- Lịch học tuần ----
   var DSHORT = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
   var LOGO = (document.querySelector('.brand img') || {}).src || '';
-  var schedCache = {};
+  var schedCache = {};   // { off: { at: thời điểm tải, w: dữ liệu } }, dùng lại trong 5 phút
   function addDay(d, n) { var t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); }
   function renderSched(w) {
     var p1 = w.mon.split('-'), p2 = w.sun.split('-');
@@ -307,10 +334,11 @@
   function loadSched(off) {
     $('wk0').classList.toggle('on', off === 0);
     $('wk1').classList.toggle('on', off === 1);
-    if (schedCache[off]) { renderSched(schedCache[off]); return; }
+    var c = schedCache[off];
+    if (c && Date.now() - c.at < 5 * 60 * 1000) { renderSched(c.w); return; }
     $('schedList').innerHTML = '<p class="sub">Đang tải lịch học…</p>';
     call('getSchedule', off).then(function (w) {
-      schedCache[off] = w;
+      schedCache[off] = { at: Date.now(), w: w };
       if ($('wk' + off).classList.contains('on')) renderSched(w);
     }).catch(function () {
       $('schedList').innerHTML = '<p class="sub">Chưa tải được lịch học. Tải lại trang để thử lại.</p>';
