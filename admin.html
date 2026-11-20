@@ -570,12 +570,22 @@
 
   function busy(btn, on, label) { btn.disabled = on; if (label) btn.textContent = label; }
 
+  /**
+   * Tải số liệu. remember có giá trị = đăng nhập bằng mật khẩu vừa gõ: máy chủ trả về phiên đăng nhập (d.token),
+   * trang lưu phiên này thay cho mật khẩu. Không có = tự đăng nhập bằng phiên (hoặc mật khẩu cũ) đã lưu.
+   */
   function load(remember) {
-    return call('adminData', PW).then(function (d) {
-      if (remember !== undefined) keep(PW, remember);
+    var args = remember === undefined ? ['adminData', PW] : ['adminData', PW, { remember: !!remember }];
+    return call.apply(null, args).then(function (d) {
+      if (d.token) {
+        var keepIt = remember === undefined ? !!localStorageHas() : remember;
+        PW = d.token; keep(PW, keepIt);
+      }
+      $('pw').value = '';
       show('login', false); show('app', true); setData(d);
     });
   }
+  function localStorageHas() { try { return !!localStorage.getItem('tsa_pw'); } catch (e) { return false; } }
 
   $('fLogin').addEventListener('submit', function (ev) {
     ev.preventDefault();
@@ -586,7 +596,11 @@
       .then(function () { busy($('bLogin'), false, 'Đăng nhập'); });
   });
 
-  $('bOut').addEventListener('click', function () { PW = ''; keep(''); $('pw').value = ''; show('app', false); show('login', true); });
+  $('bOut').addEventListener('click', function () {
+    // Hủy phiên trên máy chủ (không chờ kết quả), rồi xóa khỏi máy này.
+    if (PW.indexOf('tsa1.') === 0) call('adminLogout', PW).catch(function () {});
+    PW = ''; keep(''); $('pw').value = ''; show('app', false); show('login', true);
+  });
   $('bReload').addEventListener('click', function () {
     busy($('bReload'), true, 'Đang tải…');
     load().catch(function (e) { $('eTkb').textContent = emsg(e); }).then(function () { busy($('bReload'), false, 'Tải lại số liệu'); });
@@ -671,12 +685,11 @@
   // Chỉ quên mật khẩu khi máy chủ báo sai (ví dụ chị đã đổi mật khẩu); lỗi mạng thì giữ lại để bấm thử lại.
   PW = keep();
   if (PW) {
-    $('pw').value = PW;
     busy($('bLogin'), true, 'Đang mở trang quản trị…');
     load().catch(function (e) {
       var m = emsg(e);
-      if (/sai mật khẩu/i.test(m)) { PW = ''; keep(''); $('pw').value = ''; m = 'Mật khẩu đã thay đổi, chị nhập lại nhé.'; }
-      else m = m + ' Bấm Đăng nhập để thử lại.';
+      if (/sai mật khẩu|hết hạn|đăng nhập lại/i.test(m)) { PW = ''; keep(''); m = 'Phiên đăng nhập đã hết hạn hoặc mật khẩu đã đổi, nhập lại mật khẩu nhé.'; }
+      else m = m + ' Tải lại trang để thử lại.';
       $('eLogin').textContent = m; show('eLogin', true);
     }).then(function () { busy($('bLogin'), false, 'Đăng nhập'); });
   }
