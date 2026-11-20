@@ -73,6 +73,19 @@
   .login input { width:100%; height:44px; margin:14px 0 10px; }
   .login .btn { width:100%; height:44px; }
   .linkbox { font-size:13px; color:var(--muted); word-break:break-all; }
+  .tag.live { background:var(--ok-bg); color:var(--ok); }
+  .gate { border-color:var(--brand); margin-bottom:14px; }
+  .grow { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:12px 0; border-bottom:1px solid var(--line); }
+  .grow:last-child { border-bottom:0; }
+  .grow .gt { font-weight:700; }
+  .grow .gs { font-size:13px; color:var(--muted); }
+  .btn.go { background:var(--ok); border-color:var(--ok); color:#fff; }
+  .btn.go:hover { background:#166534; }
+  .btn.stop { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .btn.stop:hover { background:var(--brand-dark); }
+  .btn.lg { height:42px; padding:0 16px; }
+  .share { display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:var(--ok-bg); border-radius:10px; padding:8px 10px; margin-top:8px; font-size:13px; width:100%; }
+  .share code { word-break:break-all; flex:1 1 220px; }
 </style>
 </head>
 <body>
@@ -102,6 +115,18 @@
     <div class="card hide" id="warnBox" style="margin-bottom:14px; border-color:#F5C26B; background:#FFFBEB">
       <h2 style="color:#92400E">Cần kiểm tra dữ liệu trong Google Sheet</h2>
       <ul id="warnList" style="margin:6px 0 0; padding-left:20px; font-size:13px; color:#78350F"></ul>
+    </div>
+
+    <div class="card gate">
+      <div class="head">
+        <div>
+          <h2>Mở / khóa điểm danh</h2>
+          <p class="sub" id="gateRule"></p>
+        </div>
+        <button class="btn sm" id="bGate" type="button" title="Xem số bạn đã điểm danh (chậm tối đa khoảng 1 phút)">Cập nhật số bạn</button>
+      </div>
+      <div id="gateList"></div>
+      <p class="msg" id="eGate"></p>
     </div>
 
     <div class="metrics">
@@ -244,6 +269,7 @@
 
   function setData(d) {
     D = d;
+    skew = D.now - Date.now();
     if (!week) week = monday(D.today);
     D.past = D.sessions.filter(function (s) { return s.startMs <= D.now; });
     D.attMap = {};
@@ -262,19 +288,107 @@
   /** Nội quy: vắng bao nhiêu buổi liên tiếp thì thu hồi khóa học. Cảnh báo "nên nhắc" từ (số này − 2). */
   var VANG_THU_HOI = 5;
 
-  function renderAll() { renderMetrics(); renderRank(); renderDetail(); renderAlert(); renderTkb(); renderMisc(); }
+  function renderAll() { renderMetrics(); renderGate(); renderRank(); renderDetail(); renderAlert(); renderTkb(); renderMisc(); }
 
-  /** Thời điểm buổi học đóng điểm danh (giờ kết thúc + số phút đóng sau), giờ Việt Nam. */
-  function closeMsOf(s) {
-    var st = Date.parse(s.date + 'T' + s.start + ':00+07:00');
+  /** Giờ máy chủ ước tính (lệch giữa đồng hồ máy này và máy chủ lúc tải số liệu đã được bù). */
+  var skew = 0;
+  function nowMs() { return Date.now() + skew; }
+  function hm(ms) { return new Date(ms + 7 * 3600000).toISOString().slice(11, 16); }
+
+  /** Trạng thái điểm danh của buổi: open / closed / wait / ended (giống Code.gs). */
+  function gateOf(s) {
+    var g = s.gate, now = nowMs();
+    if (g && g.o) {
+      var autoAt = g.o + (D.autoClose || 120) * 60000;
+      if (!g.c && now < autoAt) return { state: 'open', openedAt: g.o, closeAt: autoAt };
+      return { state: 'closed', openedAt: g.o, closeAt: g.c ? Math.min(g.c, autoAt) : autoAt };
+    }
     var en = Date.parse(s.date + 'T' + s.end + ':00+07:00');
-    if (en <= st) en += 86400000;
-    return en + (D.after || 0) * 60000;
+    if (en <= Date.parse(s.date + 'T' + s.start + ':00+07:00')) en += 86400000;
+    return { state: now > en + (D.after || 0) * 60000 ? 'ended' : 'wait', endAt: en + (D.after || 0) * 60000 };
+  }
+
+  /** Thời điểm buổi học hết nhận điểm danh: lúc khóa nếu đã từng mở, nếu không thì giờ kết thúc + số phút đóng sau. */
+  function closeMsOf(s) {
+    var g = gateOf(s);
+    if (g.state === 'open') return Infinity;
+    return g.closeAt || g.endAt;
+  }
+
+  function gateTag(g) {
+    return g.state === 'open' ? '<span class="tag live">Đang mở · tự khóa ' + hm(g.closeAt) + '</span>'
+      : g.state === 'closed' ? '<span class="tag no">Đã khóa ' + hm(g.closeAt) + '</span>'
+      : g.state === 'wait' ? '<span class="tag warn">Chưa mở điểm danh</span>'
+      : '<span class="tag no">Không mở điểm danh</span>';
+  }
+
+  function studentLink() {
+    var standalone = !(window.google && google.script && google.script.run);
+    return standalone ? location.origin + location.pathname.replace(/admin\.html$/i, '') : (D.url || '');
+  }
+
+  var justOpened = '';
+  /** Ô "Mở / khóa điểm danh": các buổi hôm nay và mọi buổi đang mở. */
+  function renderGate() {
+    $('gateRule').textContent = 'Học sinh chỉ điểm danh được khi buổi học đang mở. Bấm Mở lúc vào học rồi gửi link cho học sinh; quên khóa thì tự khóa sau '
+      + (D.autoClose || 120) + ' phút kể từ lúc mở.';
+    var list = D.sessions.filter(function (s) { return s.date === D.today || gateOf(s).state === 'open'; });
+    if (!list.length) { $('gateList').innerHTML = '<p class="sub" style="padding:8px 0">Hôm nay không có buổi học nào trên thời khóa biểu. Buổi ngày khác mở ở mục Thời khóa biểu bên dưới.</p>'; return; }
+    var link = studentLink();
+    $('gateList').innerHTML = list.map(function (s) {
+      var g = gateOf(s), open = g.state === 'open';
+      return '<div class="grow"><span><span class="gt">' + esc(s.subject) + '</span> <span class="tag cnt2">' + s.count + ' bạn</span><br>'
+        + '<span class="gs">' + fmtD(s.date) + ' · ' + esc(s.start) + '–' + esc(s.end) + (s.teacher ? ' · ' + esc(s.teacher) : '') + '</span> ' + gateTag(g) + '</span>'
+        + '<button type="button" class="btn lg ' + (open ? 'stop' : 'go') + '" data-gate="' + esc(s.id) + '" data-open="' + (open ? '0' : '1') + '">'
+        + (open ? 'Khóa điểm danh' : (g.state === 'closed' ? 'Mở lại' : 'Mở điểm danh')) + '</button>'
+        + (open && justOpened === s.id && link ? '<div class="share"><span>Đã mở. Gửi link này cho học sinh:</span><code>' + esc(link) + '</code>'
+          + '<button type="button" class="btn sm" data-copy="1">Sao chép link</button></div>' : '')
+        + '</div>';
+    }).join('');
+  }
+
+  /** Cập nhật trạng thái mở/khóa và số bạn từng buổi từ kết quả nhẹ của máy chủ (không tải lại cả số liệu). */
+  function applyGate(r) {
+    skew = r.now - Date.now(); D.autoClose = r.autoClose;
+    D.sessions.forEach(function (s) {
+      s.gate = r.gate[s.id] || null;
+      if (r.counts && r.counts[s.id] > s.count) s.count = r.counts[s.id];
+    });
+  }
+
+  var gateBusy = 0;
+  function setGate(btn) {
+    var id = btn.getAttribute('data-gate'), open = btn.getAttribute('data-open') === '1', ses = null;
+    D.sessions.forEach(function (s) { if (s.id === id) ses = s; });
+    if (!ses) return;
+    var label = ses.subject + ' ' + fmtD(ses.date) + ' (' + ses.start + '–' + ses.end + ')';
+    if (!open && !confirm('Khóa điểm danh buổi ' + label + '?\nSau khi khóa, học sinh không điểm danh được nữa (có thể mở lại).')) return;
+    if (open && ses.date !== D.today && !confirm('Buổi ' + label + ' không phải buổi hôm nay.\nVẫn mở điểm danh cho buổi này (ví dụ để điểm danh bù)?')) return;
+    $('eGate').textContent = ''; $('eTkb').textContent = '';
+    busy(btn, true, open ? 'Đang mở…' : 'Đang khóa…');
+    gateBusy++;
+    call('adminSetGate', PW, id, open).then(function (r) {
+      applyGate(r);
+      justOpened = open ? id : '';
+      renderAll();
+    }).catch(function (e) {
+      renderGate(); renderTkb();
+      $('eGate').textContent = $('eTkb').textContent = emsg(e);
+    }).then(function () { gateBusy--; });
+  }
+
+  function refreshGate() {
+    var b = $('bGate');
+    busy(b, true, 'Đang cập nhật…'); $('eGate').textContent = '';
+    gateBusy++;
+    call('adminGateStatus', PW).then(function (r) { applyGate(r); renderGate(); renderTkb(); })
+      .catch(function (e) { $('eGate').textContent = emsg(e); })
+      .then(function () { gateBusy--; busy(b, false, 'Cập nhật số bạn'); });
   }
 
   /** Chuỗi vắng liên tiếp của từng học sinh, tính chung mọi môn theo thứ tự buổi học. */
   function absenceStreaks() {
-    var done = D.sessions.filter(function (s) { return closeMsOf(s) < D.now; })
+    var done = D.sessions.filter(function (s) { return closeMsOf(s) < nowMs(); })
       .sort(function (a, b) { return a.startMs - b.startMs; });
     var rows = D.students.map(function (st) {
       var m = D.attMap[st.sbd] || {}, cur = 0, max = 0, last = '';
@@ -388,8 +502,10 @@
       + '<p class="sub">' + esc(st.sbd) + (st.note ? ' · ' + esc(st.note) : '') + ' · ' + c + '/' + ses.length + ' buổi (' + pct + '%)</p>'
       + '<div class="scroll" style="margin-top:8px">' + (ses.length ? ses.map(function (s) {
         var t = m[s.id];
+        var gs = gateOf(s).state;
         var tag = t !== undefined ? '<span class="tag ok">' + esc(timeOf(t)) + '</span>'
-          : closeMsOf(s) >= D.now ? '<span class="tag no">Đang mở điểm danh</span>'
+          : gs === 'open' ? '<span class="tag no">Đang mở điểm danh</span>'
+          : gs === 'wait' ? '<span class="tag no">Chưa mở điểm danh</span>'
           : '<span class="tag no">Vắng</span>';
         return '<div class="row"><span>' + fmtD(s.date) + ' · ' + esc(s.start) + ' · ' + esc(s.subject) + '</span>' + tag + '</div>';
       }).join('') : '<p class="sub">Chưa có buổi nào diễn ra.</p>') + '</div>';
@@ -400,9 +516,11 @@
     $('weekLabel').textContent = 'Tuần ' + dm(week) + ' – ' + dm(end) + '/' + end.slice(0, 4);
     var ses = D.sessions.filter(function (s) { return s.date >= week && s.date <= end; });
     $('tkb').innerHTML = ses.length ? ses.map(function (s) {
+      var g = gateOf(s), open = g.state === 'open';
       return '<div class="srow"><b>' + fmtD(s.date) + '</b><span>' + esc(s.start) + '–' + esc(s.end) + '</span>'
-        + '<span>' + esc(s.subject) + (s.teacher ? ' · ' + esc(s.teacher) : '') + (s.note ? ' <span class="sub">· ' + esc(s.note) + '</span>' : '') + '</span>'
+        + '<span>' + esc(s.subject) + (s.teacher ? ' · ' + esc(s.teacher) : '') + (s.note ? ' <span class="sub">· ' + esc(s.note) + '</span>' : '') + '<br>' + gateTag(g) + '</span>'
         + '<span class="tools"><span class="tag cnt2">' + s.count + ' bạn</span>'
+        + '<button type="button" class="btn sm ' + (open ? 'stop' : 'go') + '" data-gate="' + esc(s.id) + '" data-open="' + (open ? '0' : '1') + '">' + (open ? 'Khóa' : 'Mở') + '</button>'
         + '<button type="button" class="btn sm" data-edit="' + esc(s.id) + '">Sửa</button>'
         + '<button type="button" class="btn sm dan" data-del="' + esc(s.id) + '">Xóa</button></span></div>';
     }).join('') : '<p class="sub" style="padding:12px 0">Tuần này chưa có buổi học. Bấm “Thêm buổi” hoặc “Chép tuần trước sang”.</p>';
@@ -416,9 +534,9 @@
 
   function renderMisc() {
     renderWarnings();
-    $('rule').textContent = 'Mỗi buổi mở điểm danh từ ' + D.before + ' phút trước giờ bắt đầu đến ' + D.after + ' phút sau giờ kết thúc (đổi ở tab CauHinh).';
-    var standalone = !(window.google && google.script && google.script.run);
-    $('link').textContent = standalone ? location.origin + location.pathname.replace(/admin\.html$/i, '') : D.url ||'Xem link ở menu “Điểm danh TSA > Xem link app” trong Google Sheet.';
+    $('rule').textContent = 'Điểm danh chỉ mở khi thầy/cô bấm Mở; quên khóa thì tự khóa sau ' + (D.autoClose || 120) + ' phút kể từ lúc mở (đổi ở tab CauHinh, dòng TU_KHOA_SAU_PHUT). '
+      + 'Buổi không được mở thì sau giờ kết thúc ' + D.after + ' phút được tính là đã diễn ra (mọi bạn vắng).';
+    $('link').textContent = studentLink() || 'Xem link ở menu “Điểm danh TSA > Xem link app” trong Google Sheet.';
   }
 
   function openForm(s) {
@@ -491,9 +609,26 @@
       .then(function () { busy($('bSave'), false); });
   });
 
+  $('gateList').addEventListener('click', function (ev) {
+    var g = ev.target.closest('[data-gate]'), c = ev.target.closest('[data-copy]');
+    if (g) setGate(g);
+    if (c) {
+      var link = studentLink(), done = function () { c.textContent = 'Đã sao chép'; };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(done, function () { prompt('Sao chép link này:', link); });
+      else prompt('Sao chép link này:', link);
+    }
+  });
+  // Cập nhật nhãn "Đang mở / tự khóa" mỗi 30 giây để thấy buổi tự khóa mà không cần tải lại.
+  setInterval(function () {
+    if (!D || gateBusy || $('app').classList.contains('hide')) return;
+    renderGate(); renderTkb();
+  }, 30000);
+  $('bGate').addEventListener('click', refreshGate);
+
   $('tkb').addEventListener('click', function (ev) {
-    var e = ev.target.closest('[data-edit]'), d = ev.target.closest('[data-del]');
+    var e = ev.target.closest('[data-edit]'), d = ev.target.closest('[data-del]'), g = ev.target.closest('[data-gate]');
     $('eTkb').textContent = '';
+    if (g) { setGate(g); return; }
     if (e) {
       D.sessions.forEach(function (s) { if (s.id === e.getAttribute('data-edit')) openForm(s); });
     } else if (d) {
