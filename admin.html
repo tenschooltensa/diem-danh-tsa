@@ -72,6 +72,8 @@
   .login { max-width:380px; margin:60px auto; }
   .login input { width:100%; height:44px; margin:14px 0 10px; }
   .login .btn { width:100%; height:44px; }
+  .login .remember { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); margin:0 0 12px; cursor:pointer; }
+  .login .remember input { width:auto; height:auto; margin:0; accent-color:var(--brand); }
   .linkbox { font-size:13px; color:var(--muted); word-break:break-all; }
   .tag.live { background:var(--ok-bg); color:var(--ok); }
   .gate { border-color:var(--brand); margin-bottom:14px; }
@@ -97,6 +99,7 @@
     <p class="sub">Nhập mật khẩu quản trị (ở tab CauHinh của Google Sheet).</p>
     <form id="fLogin">
       <input type="password" id="pw" placeholder="Mật khẩu" autocomplete="current-password">
+      <label class="remember"><input type="checkbox" id="remember" checked> Ghi nhớ đăng nhập trên máy này</label>
       <p class="msg hide" id="eLogin"></p>
       <button class="btn pri" id="bLogin" type="submit">Đăng nhập</button>
     </form>
@@ -265,7 +268,19 @@
   function monday(d) { return addDays(d, -((dow(d) + 6) % 7)); }
   function dm(d) { var p = d.split('-'); return p[2] + '/' + p[1]; }
   function fmtD(d) { return DOW[dow(d)] + ' ' + dm(d); }
-  function keep(v) { try { if (v === undefined) return sessionStorage.getItem('tsa_pw') || ''; sessionStorage.setItem('tsa_pw', v); } catch (e) {} return ''; }
+  /**
+   * Ghi nhớ mật khẩu để tải lại trang (F5) hay mở lại trình duyệt không phải nhập lại.
+   * "Ghi nhớ trên máy này": lưu lâu dài (localStorage); bỏ chọn: chỉ nhớ đến khi đóng tab (sessionStorage).
+   * Đăng xuất thì xóa cả hai.
+   */
+  function keep(v, remember) {
+    try {
+      if (v === undefined) return localStorage.getItem('tsa_pw') || sessionStorage.getItem('tsa_pw') || '';
+      localStorage.removeItem('tsa_pw'); sessionStorage.removeItem('tsa_pw');
+      if (v) (remember ? localStorage : sessionStorage).setItem('tsa_pw', v);
+    } catch (e) {}
+    return '';
+  }
 
   function setData(d) {
     D = d;
@@ -555,9 +570,10 @@
 
   function busy(btn, on, label) { btn.disabled = on; if (label) btn.textContent = label; }
 
-  function load() {
+  function load(remember) {
     return call('adminData', PW).then(function (d) {
-      keep(PW); show('login', false); show('app', true); setData(d);
+      if (remember !== undefined) keep(PW, remember);
+      show('login', false); show('app', true); setData(d);
     });
   }
 
@@ -566,7 +582,7 @@
     PW = $('pw').value;
     if (!PW) { $('eLogin').textContent = 'Nhập mật khẩu.'; show('eLogin', true); return; }
     show('eLogin', false); busy($('bLogin'), true, 'Đang kiểm tra…');
-    load().catch(function (e) { $('eLogin').textContent = emsg(e); show('eLogin', true); })
+    load($('remember').checked).catch(function (e) { $('eLogin').textContent = emsg(e); show('eLogin', true); })
       .then(function () { busy($('bLogin'), false, 'Đăng nhập'); });
   });
 
@@ -651,8 +667,19 @@
       .then(function () { busy($('bCopy'), false); });
   });
 
+  // Đã ghi nhớ mật khẩu: tự đăng nhập, trong lúc tải hiện "Đang mở…" thay vì ô mật khẩu.
+  // Chỉ quên mật khẩu khi máy chủ báo sai (ví dụ chị đã đổi mật khẩu); lỗi mạng thì giữ lại để bấm thử lại.
   PW = keep();
-  if (PW) load().catch(function () { PW = ''; keep(''); });
+  if (PW) {
+    $('pw').value = PW;
+    busy($('bLogin'), true, 'Đang mở trang quản trị…');
+    load().catch(function (e) {
+      var m = emsg(e);
+      if (/sai mật khẩu/i.test(m)) { PW = ''; keep(''); $('pw').value = ''; m = 'Mật khẩu đã thay đổi, chị nhập lại nhé.'; }
+      else m = m + ' Bấm Đăng nhập để thử lại.';
+      $('eLogin').textContent = m; show('eLogin', true);
+    }).then(function () { busy($('bLogin'), false, 'Đăng nhập'); });
+  }
 </script>
 </body>
 </html>
